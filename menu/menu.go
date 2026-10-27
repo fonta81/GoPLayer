@@ -76,7 +76,7 @@ var (
 
 	// menuBoxStyle define el contenedor exterior que engloba todo el contenido del menú.
 	menuBoxStyle = lipgloss.NewStyle().
-			Width(58).
+			Width(60).
 			Padding(0, 1)
 
 	// headerBoxStyle define el contenedor con borde redondeado para el encabezado del menú.

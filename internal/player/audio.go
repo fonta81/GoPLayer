@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/faiface/beep"
@@ -54,14 +55,22 @@ func (l *Limiter) Err() error {
 // AudioEngine centraliza la carga, decodificación, efectos y reproducción de archivos de audio.
 // Controla el ciclo de vida del altavoz (speaker) y la sincronización segura frente a accesos concurrentes.
 type AudioEngine struct {
-	streamer   beep.StreamSeekCloser // Decodificador activo del archivo de audio con capacidad de seek y cierre
-	ctrl       *beep.Ctrl            // Controlador para pausar y reanudar el flujo de datos
-	volume     *effects.Volume       // Efecto de ganancia para control de volumen logarítmico
-	eq         *Equalizer            // Ecualizador paramétrico de 5 bandas
-	format     beep.Format           // Formato original del archivo (frecuencia de muestreo y precisión)
-	isInit     bool                  // Bandera para asegurar inicialización única del altavoz
-	sessionID  int                   // Identificador de la sesión de reproducción actual (invalida eventos de pistas pasadas)
-	cancelChan chan struct{}         // Canal para abortar de forma limpia la espera de término si se salta de pista
+	streamer    beep.StreamSeekCloser // Decodificador activo del archivo de audio con capacidad de seek y cierre
+	ctrl        *beep.Ctrl            // Controlador para pausar y reanudar el flujo de datos
+	volume      *effects.Volume       // Efecto de ganancia para control de volumen logarítmico
+	eq          *Equalizer            // Ecualizador paramétrico de 5 bandas
+	format      beep.Format           // Formato original del archivo (frecuencia de muestreo y precisión)
+	isInit      bool                  // Bandera para asegurar inicialización única del altavoz
+	sessionID   int                   // Identificador de la sesión de reproducción actual (invalida eventos de pistas pasadas)
+	cancelChan  chan struct{}         // Canal para abortar de forma limpia la espera de término si se salta de pista
+	sessionMu   sync.Mutex
+	lifecycleMu sync.Mutex
+	playbackMu  sync.Mutex
+	statusMu    sync.RWMutex
+	hasEQ       bool
+	eqEnabled   bool
+	eqGains     [eqBandCount]float64
+	muted       bool
 }
 
 // NewAudioEngine inicializa y devuelve una nueva instancia del motor de audio.
@@ -74,6 +83,9 @@ func NewAudioEngine() *AudioEngine {
 // estándar de 44.1 kHz y configura la cadena de efectos (control de pausa y volumen).
 // Devuelve la duración real del archivo o un error en caso de fallo.
 func (ae *AudioEngine) Load(track Track) (time.Duration, error) {
+	ae.lifecycleMu.Lock()
+	defer ae.lifecycleMu.Unlock()
+
 	ae.Stop()
 
 	file, err := os.Open(track.Path)
@@ -116,30 +128,41 @@ func (ae *AudioEngine) Load(track Track) (time.Duration, error) {
 		ae.isInit = true
 	}
 
-	ae.streamer = streamer
-	ae.format = format
-
 	// Remuestreo de alta calidad a 44100 Hz para evitar desajustes de velocidad en archivos con diferente frecuencia
 	resampled := beep.Resample(4, format.SampleRate, standardSampleRate, streamer)
 
-	ae.ctrl = &beep.Ctrl{Streamer: resampled}
-	ae.eq = NewEqualizer(ae.ctrl, standardSampleRate)
+	ctrl := &beep.Ctrl{Streamer: resampled}
+	eq := NewEqualizer(ctrl, standardSampleRate)
 
 	// Restaurar los ajustes de EQ guardados en la configuración de usuario,
 	// si existen, para conservarlos entre sesiones.
 	if enabled, gains, err := LoadEQ(); err == nil {
-		ae.eq.Enabled = enabled
+		eq.Enabled = enabled
 		for i := range gains {
-			ae.eq.SetGain(i, gains[i])
+			eq.SetGain(i, gains[i])
 		}
 	}
 
-	ae.volume = &effects.Volume{
-		Streamer: ae.eq,
+	volume := &effects.Volume{
+		Streamer: eq,
 		Base:     math.Pow(10, 1.0/20.0), // Base para atenuación/ganancia logarítmica en decibelios (dB)
 		Volume:   0,
 		Silent:   false,
 	}
+
+	speaker.Lock()
+	ae.streamer = streamer
+	ae.format = format
+	ae.ctrl = ctrl
+	ae.eq = eq
+	ae.volume = volume
+	ae.statusMu.Lock()
+	ae.hasEQ = true
+	ae.eqEnabled = eq.Enabled
+	ae.eqGains = eq.Gains
+	ae.muted = volume.Silent
+	ae.statusMu.Unlock()
+	speaker.Unlock()
 
 	return realDuration, nil
 }
@@ -147,8 +170,19 @@ func (ae *AudioEngine) Load(track Track) (time.Duration, error) {
 // Play envía la cadena de audio (Limiter -> Volume -> Ctrl -> Streamer) al subsistema de altavoces
 // y devuelve un canal que se cierra automáticamente cuando la reproducción concluye con éxito.
 func (ae *AudioEngine) Play() chan struct{} {
+	ae.playbackMu.Lock()
+	defer ae.playbackMu.Unlock()
+
 	done := make(chan struct{})
-	limiter := &Limiter{Streamer: ae.volume}
+	speaker.Lock()
+	volume := ae.volume
+	speaker.Unlock()
+	if volume == nil {
+		close(done)
+		return done
+	}
+
+	limiter := &Limiter{Streamer: volume}
 
 	speaker.Play(beep.Seq(limiter, beep.Callback(func() {
 		close(done)
@@ -159,150 +193,69 @@ func (ae *AudioEngine) Play() chan struct{} {
 // Stop cancela inmediatamente la reproducción activa, limpia la cola de muestras del altavoz
 // y cierra el archivo de audio liberando los descriptores de archivo asociados.
 func (ae *AudioEngine) Stop() {
+	ae.playbackMu.Lock()
+	defer ae.playbackMu.Unlock()
+
 	speaker.Clear()
 
-	if ae.cancelChan != nil {
-		close(ae.cancelChan)
-		ae.cancelChan = nil
-	}
-	if ae.streamer != nil {
-		_ = ae.streamer.Close()
-		ae.streamer = nil
-	}
+	ae.cancelPlaybackWait()
 	speaker.Lock()
+	streamer := ae.streamer
+	ae.streamer = nil
 	ae.ctrl = nil
 	ae.volume = nil
 	ae.eq = nil
+	ae.statusMu.Lock()
+	ae.hasEQ = false
+	ae.eqEnabled = false
+	ae.eqGains = [eqBandCount]float64{}
+	ae.muted = false
+	ae.statusMu.Unlock()
 	speaker.Unlock()
-}
 
-// Pause pausa la reproducción actual de manera segura evitando condiciones de carrera con el hilo de audio.
-func (ae *AudioEngine) Pause() {
-	speaker.Lock()
-	defer speaker.Unlock()
-	if ae.ctrl == nil {
-		return
+	if streamer != nil {
+		_ = streamer.Close()
 	}
-	ae.ctrl.Paused = true
-}
-
-// Resume reanuda la reproducción previamente pausada de manera segura.
-func (ae *AudioEngine) Resume() {
-	speaker.Lock()
-	defer speaker.Unlock()
-	if ae.ctrl == nil {
-		return
-	}
-	ae.ctrl.Paused = false
-}
-
-// SetVolume ajusta la ganancia en decibelios (dB) dentro del efecto de volumen de forma segura.
-func (ae *AudioEngine) SetVolume(level float64) {
-	speaker.Lock()
-	defer speaker.Unlock()
-	if ae.volume == nil {
-		return
-	}
-	ae.volume.Volume = level
-}
-
-// ToggleMute conmuta el estado de silencio (mute) sin perder el nivel de volumen configurado.
-func (ae *AudioEngine) ToggleMute() {
-	speaker.Lock()
-	defer speaker.Unlock()
-	if ae.volume == nil {
-		return
-	}
-	ae.volume.Silent = !ae.volume.Silent
-}
-
-// SetEQBand ajusta la ganancia (dB) de una banda del ecualizador de forma segura.
-func (ae *AudioEngine) SetEQBand(band int, gainDB float64) {
-	speaker.Lock()
-	defer speaker.Unlock()
-	if ae.eq == nil {
-		return
-	}
-	ae.eq.SetGain(band, gainDB)
-}
-
-// GetEQBands devuelve una copia de las ganancias actuales por banda en dB.
-func (ae *AudioEngine) GetEQBands() [eqBandCount]float64 {
-	speaker.Lock()
-	defer speaker.Unlock()
-	if ae.eq == nil {
-		return [eqBandCount]float64{}
-	}
-	return ae.eq.Gains
-}
-
-// ToggleEQ activa o desactiva el ecualizador (bypass) y devuelve el nuevo estado.
-func (ae *AudioEngine) ToggleEQ() bool {
-	speaker.Lock()
-	defer speaker.Unlock()
-	if ae.eq == nil {
-		return false
-	}
-	ae.eq.Enabled = !ae.eq.Enabled
-	return ae.eq.Enabled
-}
-
-// HasEQ indica si hay un stream activo con ecualizador inicializado.
-func (ae *AudioEngine) HasEQ() bool {
-	speaker.Lock()
-	defer speaker.Unlock()
-	return ae.eq != nil
-}
-
-// EQEnabled indica si el ecualizador está activo.
-func (ae *AudioEngine) EQEnabled() bool {
-	speaker.Lock()
-	defer speaker.Unlock()
-	return ae.eq != nil && ae.eq.Enabled
-}
-
-// IsMuted indica si el audio está actualmente silenciado de forma segura.
-func (ae *AudioEngine) IsMuted() bool {
-	speaker.Lock()
-	defer speaker.Unlock()
-	return ae.volume != nil && ae.volume.Silent
-}
-
-// Position calcula y devuelve el tiempo transcurrido de reproducción de la pista actual en formato time.Duration.
-func (ae *AudioEngine) Position() time.Duration {
-	speaker.Lock()
-	defer speaker.Unlock()
-	if ae.streamer != nil {
-		return ae.format.SampleRate.D(ae.streamer.Position())
-	}
-	return 0
-}
-
-// Seek desplaza la posición de lectura del stream a la duración solicitada de forma segura.
-// Retorna un error si el formato del archivo no admite posicionamiento arbitrario.
-func (ae *AudioEngine) Seek(position time.Duration) error {
-	speaker.Lock()
-	defer speaker.Unlock()
-	if ae.streamer == nil {
-		return fmt.Errorf("no hay stream activo")
-	}
-
-	seeker, ok := ae.streamer.(beep.StreamSeeker)
-	if !ok {
-		return fmt.Errorf("formato no permite seek")
-	}
-
-	samples := ae.format.SampleRate.N(position)
-	if err := seeker.Seek(samples); err != nil {
-		return fmt.Errorf("seek fallido: %w", err)
-	}
-	return nil
 }
 
 // Close detiene la reproducción y libera de manera definitiva los recursos del subsistema de audio.
 func (ae *AudioEngine) Close() {
+	ae.lifecycleMu.Lock()
+	defer ae.lifecycleMu.Unlock()
+
 	ae.Stop()
 	if ae.isInit {
+		ae.playbackMu.Lock()
 		speaker.Close()
+		ae.playbackMu.Unlock()
+		ae.isInit = false
+	}
+}
+
+func (ae *AudioEngine) startPlaybackSession() (int, <-chan struct{}) {
+	ae.sessionMu.Lock()
+	defer ae.sessionMu.Unlock()
+
+	if ae.cancelChan != nil {
+		close(ae.cancelChan)
+	}
+	ae.sessionID++
+	ae.cancelChan = make(chan struct{})
+	return ae.sessionID, ae.cancelChan
+}
+
+func (ae *AudioEngine) playbackSessionID() int {
+	ae.sessionMu.Lock()
+	defer ae.sessionMu.Unlock()
+	return ae.sessionID
+}
+
+func (ae *AudioEngine) cancelPlaybackWait() {
+	ae.sessionMu.Lock()
+	defer ae.sessionMu.Unlock()
+
+	if ae.cancelChan != nil {
+		close(ae.cancelChan)
+		ae.cancelChan = nil
 	}
 }

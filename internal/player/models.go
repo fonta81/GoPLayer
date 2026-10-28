@@ -92,6 +92,7 @@ type Playlist struct {
 	shuffleOrder    []int      // Permutación pseudoaleatoria de índices generada por el algoritmo Fisher-Yates
 	shuffleIdx      int        // Posición actual del cursor dentro de la secuencia permutada shuffleOrder
 	shuffleStartIdx int        // Índice de inicio de la permutación aleatoria para detectar ciclos completos
+	revision        uint64     // Versión de los metadatos de pistas para invalidar cachés de búsqueda
 }
 
 // NewPlaylist inicializa y devuelve una lista de reproducción vacía con el cursor inactivo (-1).
@@ -107,6 +108,7 @@ func NewPlaylist() *Playlist {
 // Si el modo aleatorio se encuentra habilitado, regenera la secuencia permutada.
 func (p *Playlist) Add(track Track) {
 	p.tracks = append(p.tracks, track)
+	p.revision++
 	if p.current == -1 {
 		p.current = 0
 	}
@@ -123,6 +125,7 @@ func (p *Playlist) Remove(index int) {
 		return
 	}
 	p.tracks = append(p.tracks[:index], p.tracks[index+1:]...)
+	p.revision++
 	if p.shuffle {
 		p.rebuildShuffleAfterRemove(index)
 	}
@@ -142,6 +145,7 @@ func (p *Playlist) Remove(index int) {
 // y las estructuras de seguimiento del modo aleatorio a su estado predeterminado.
 func (p *Playlist) Clear() {
 	p.tracks = make([]Track, 0)
+	p.revision++
 	p.current = -1
 	p.shuffleOrder = nil
 	p.shuffleIdx = 0

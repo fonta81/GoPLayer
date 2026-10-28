@@ -27,8 +27,6 @@ const (
 	iconPlay      = "󰐊" // Icono de reproducción activa
 	iconPause     = "󰏤" // Icono de reproducción pausada
 	iconStop      = "󰓛" // Icono de reproducción detenida
-	iconNext      = "󰒭" // Icono de salto a la siguiente pista
-	iconPrev      = "󰒮" // Icono de salto a la pista anterior
 	iconRepeatOne = "󰑘" // Icono de repetición de una pista
 	iconRepeatAll = "󰑗" // Icono de repetición de toda la lista
 	iconRepeatOff = "󰁔" // Icono de repetición desactivada

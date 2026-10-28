@@ -46,12 +46,6 @@ type SelectMsg struct {
 	Choice string // Etiqueta descriptiva del elemento seleccionado
 }
 
-// UpdateStateMsg es un mensaje de Bubble Tea utilizado para inyectar una actualización
-// de estado del reproductor de audio dentro del ciclo de actualización del menú.
-type UpdateStateMsg struct {
-	State PlayerState // Nueva instantánea del estado del reproductor
-}
-
 // menuItem modela un ítem individual en la lista navegable de opciones del menú principal.
 type menuItem struct {
 	action Action // Acción que se ejecutará al seleccionar esta opción
@@ -66,13 +60,11 @@ var (
 	colorSecondary = lipgloss.Color("#94E2D5") // Cyan / Teal para texto secundario e insignias numéricas
 	colorGreen     = lipgloss.Color("#A6E3A1") // Verde para indicar estado de reproducción activa
 	colorYellow    = lipgloss.Color("#F9E2AF") // Amarillo para indicar estado de reproducción en pausa
-	colorOrange    = lipgloss.Color("#FAB387") // Naranja para advertencias o niveles de aviso
 	colorRed       = lipgloss.Color("#F38BA8") // Rojo para indicar silenciamiento (Mute) y errores
 	colorText      = lipgloss.Color("#CDD6F4") // Color de texto principal de alto contraste
 	colorSubtext   = lipgloss.Color("#A6ADC8") // Color de texto secundario para subtítulos y artistas
 	colorMuted     = lipgloss.Color("#6C7086") // Color atenuado para metadatos complementarios y atajos
 	colorSurface   = lipgloss.Color("#313244") // Fondo para resaltar la opción actualmente seleccionada
-	colorDarkBg    = lipgloss.Color("#181825") // Tono de fondo oscuro base
 
 	// menuBoxStyle define el contenedor exterior que engloba todo el contenido del menú.
 	menuBoxStyle = lipgloss.NewStyle().
@@ -158,11 +150,10 @@ var (
 // Model gestiona el estado interno del componente de menú interactivo,
 // incluyendo el cursor de navegación, las dimensiones del terminal y los datos del reproductor.
 type Model struct {
-	cursor   int         // Posición del cursor en la lista de opciones (0-indexada)
-	selected string      // Etiqueta de la última opción seleccionada por el usuario
-	state    PlayerState // Estado sincronizado del reproductor de audio
-	width    int         // Ancho del terminal en columnas
-	height   int         // Alto del terminal en filas
+	cursor int         // Posición del cursor en la lista de opciones (0-indexada)
+	state  PlayerState // Estado sincronizado del reproductor de audio
+	width  int         // Ancho del terminal en columnas
+	height int         // Alto del terminal en filas
 }
 
 // New inicializa y devuelve una nueva instancia del modelo de menú con el cursor en la primera posición.
@@ -216,11 +207,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Actualizar dimensiones para centrado y cálculo de layout
 		m.width = msg.Width
 		m.height = msg.Height
-		return m, nil
-
-	case UpdateStateMsg:
-		// Inyectar nueva instantánea de telemetría del reproductor
-		m.state = msg.State
 		return m, nil
 
 	case tea.KeyMsg:
@@ -277,7 +263,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleSelection centraliza la lógica de ejecución al confirmar una opción del menú,
 // emitiendo el comando de finalización en caso de salida o despachando el mensaje SelectMsg correspondiente.
 func (m Model) handleSelection(item menuItem) (tea.Model, tea.Cmd) {
-	m.selected = item.label
 	if item.action == ActionQuit {
 		return m, tea.Quit
 	}

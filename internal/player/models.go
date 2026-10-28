@@ -19,18 +19,6 @@ const (
 	StatePaused                       // Reproducción suspendida temporalmente preservando la posición actual.
 )
 
-// Icon devuelve el glifo visual (Nerd Font / Unicode) representativo del estado de reproducción actual.
-func (s PlaybackState) Icon() string {
-	switch s {
-	case StatePlaying:
-		return iconPlay
-	case StatePaused:
-		return iconPause
-	default:
-		return iconStop
-	}
-}
-
 // Label devuelve la descripción textual legible para el usuario en la interfaz según el estado de reproducción activo.
 func (s PlaybackState) Label() string {
 	switch s {

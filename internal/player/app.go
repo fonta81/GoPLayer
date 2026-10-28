@@ -264,7 +264,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.progressBar.Width = max(int(float64(msg.Width)*0.7), 30)
+		m.progressBar.Width = min(progressWidth, max(1, msg.Width-36))
 		return m, nil
 
 	case tea.KeyMsg:
@@ -575,6 +575,11 @@ func (m AppModel) renderFilterBar() string {
 // renderTrackRow construye y pinta una fila de pista con cursor, número, título truncado,
 // duración y el estilo adecuado según si es la pista actual o la destacada.
 func renderTrackRow(cursor string, index int, track Track, isCurrent, isHighlighted bool, titleWidth int) string {
+	titleWidth = max(3, titleWidth)
+	displayName := track.DisplayName()
+	if titleWidth < 20 && track.Title != "" {
+		displayName = track.Title
+	}
 	style := lipgloss.NewStyle()
 	if isCurrent {
 		style = style.Bold(true).Foreground(pink)
@@ -583,7 +588,7 @@ func renderTrackRow(cursor string, index int, track Track, isCurrent, isHighligh
 	} else {
 		style = style.Foreground(foreground)
 	}
-	row := fmt.Sprintf("%s%d. %-*s [%s]", cursor, index+1, titleWidth, truncate(track.DisplayName(), titleWidth), track.FormattedDuration())
+	row := fmt.Sprintf("%s%d. %-*s [%s]", cursor, index+1, titleWidth, truncate(displayName, titleWidth), track.FormattedDuration())
 	return "  " + style.Render(row) + "\n"
 }
 
@@ -605,9 +610,9 @@ func (m AppModel) renderSuggestions() string {
 		if i == m.suggestionCursor {
 			cursor = "→  "
 		}
-		b.WriteString(renderTrackRow(cursor, idx, t, idx == m.playlist.current, i == m.suggestionCursor, 40))
+		b.WriteString(renderTrackRow(cursor, idx, t, idx == m.playlist.current, i == m.suggestionCursor, max(12, m.queueTitleWidth()-2)))
 	}
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(selection).Padding(0, 1).MarginLeft(2).Render(b.String())
+	return b.String()
 }
 
 // handleKeyInput procesa los atajos de teclado estándar en la vista principal del reproductor
@@ -847,20 +852,26 @@ func (m AppModel) View() string {
 		return m.renderErrorScreen()
 	}
 
-	sections := []string{m.renderHeader(), m.renderNowPlayingPanel(), ""}
-
+	sections := []string{m.renderHeader()}
 	if m.isPickingFolder {
-		sections = append(sections, m.renderBrowserPanel())
+		sections = append(sections, "", m.renderNowPlayingPanel(), m.renderBrowserPanel())
 	} else {
+		if m.usesWideLayout() {
+			sections = append(sections, "", lipgloss.JoinHorizontal(
+				lipgloss.Top,
+				m.renderNowPlayingPanel(),
+				" ",
+				m.renderQueueCard(),
+			))
+		} else {
+			sections = append(sections, "", m.renderNowPlayingPanel())
+		}
+
 		if m.eqActive {
 			sections = append(sections, m.renderEQPanel())
 		}
-		if m.showQueue {
-			if m.isFiltering {
-				sections = append(sections, m.renderFilterBar())
-				sections = append(sections, m.renderSuggestions())
-			}
-			sections = append(sections, m.renderPlaylistPanel())
+		if m.showQueue && !m.usesWideLayout() {
+			sections = append(sections, m.renderQueueCard())
 		}
 		if m.showHelp {
 			sections = append(sections, "", m.renderHelpPanel())
@@ -872,8 +883,26 @@ func (m AppModel) View() string {
 
 // renderHeader construye el título de la aplicación y su subtítulo con estilos de Lipgloss.
 func (m AppModel) renderHeader() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(pink).MarginLeft(2).MarginTop(1).Render(appName)
-	return title + "  " + lipgloss.NewStyle().Foreground(comment).Render(appSubtitle)
+	contentWidth := 70
+	if m.width > 0 {
+		contentWidth = min(contentWidth, max(24, m.width-10))
+	}
+	content := lipgloss.JoinVertical(
+		lipgloss.Center,
+		lipgloss.NewStyle().Bold(true).Foreground(pink).Render("🎵  G O P L A Y E R"),
+		lipgloss.NewStyle().Foreground(comment).Italic(true).Render(appSubtitle),
+	)
+	header := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(purple).
+		Width(contentWidth).
+		Align(lipgloss.Center).
+		Padding(0, 1).
+		Render(content)
+	if m.width > 0 {
+		return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, header)
+	}
+	return header
 }
 
 // renderNowPlayingPanel construye la tarjeta central que muestra la pista activa,
@@ -884,22 +913,33 @@ func (m AppModel) renderNowPlayingPanel() string {
 
 	if hasTrack {
 		content.WriteString(m.renderStatusLine(track))
-		content.WriteString("\n\n")
+		content.WriteString("\n")
 		content.WriteString(m.renderProgressBar())
-		content.WriteString("\n\n")
+		content.WriteString("\n")
 		content.WriteString(m.renderMetadataLine())
 	} else {
 		content.WriteString(lipgloss.NewStyle().Bold(true).Foreground(red).Render(iconStop + " Sin canciones\n"))
-		content.WriteString(lipgloss.NewStyle().Foreground(comment).Render("Coloca archivos .mp3 o .wav en el directorio o presiona 'o' para explorar carpetas."))
+		prompt := truncate("Presiona 'o' para explorar carpetas y agregar música.", max(12, m.nowPlayingContentWidth()-4))
+		content.WriteString(lipgloss.NewStyle().Foreground(comment).Render(prompt))
 	}
 
-	dirDisplay := lipgloss.NewStyle().Foreground(comment).MarginLeft(2).MarginTop(1).Render(iconFolder + " Directorio actual: " + m.musicDir)
+	dir := m.musicDir
+	if dir == "" {
+		dir = "Sin directorio seleccionado"
+	}
+	dirWidth := max(12, m.nowPlayingContentWidth()-18)
+	content.WriteString("\n")
+	content.WriteString(lipgloss.NewStyle().Foreground(comment).Render(iconFolder + " " + truncate(dir, dirWidth)))
 
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(purple).Padding(1, 2).Margin(0, 2).Render(content.String()) + "\n" + dirDisplay
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.playbackBorderColor()).
+		Width(m.nowPlayingContentWidth()).
+		Padding(1, 2).
+		Render(content.String())
 }
 
-// renderStatusLine devuelve la línea con el icono de estado coloreado (reproduciendo, pausado, detenido)
-// y el nombre de la pista activa formateado.
+// renderStatusLine devuelve el estado de reproducción junto al título y artista de la pista activa.
 func (m AppModel) renderStatusLine(track Track) string {
 	var icon string
 	var style lipgloss.Style
@@ -912,7 +952,19 @@ func (m AppModel) renderStatusLine(track Track) string {
 	default:
 		icon, style = iconStop, lipgloss.NewStyle().Bold(true).Foreground(red)
 	}
-	return lipgloss.NewStyle().MarginLeft(2).Render(style.Render(icon) + " " + style.Render(m.state.Label()) + "  " + track.DisplayName())
+	titleWidth := max(12, m.nowPlayingContentWidth()-4)
+	title := lipgloss.NewStyle().Bold(true).Foreground(foreground).Render(truncate(track.Title, titleWidth))
+	artist := track.Artist
+	if artist == "" {
+		artist = "Artista desconocido"
+	}
+	artist = lipgloss.NewStyle().Foreground(cyan).Render(truncate(artist, titleWidth))
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		style.Render(icon+" "+m.state.Label()),
+		title,
+		artist,
+	)
 }
 
 // renderProgressBar dibuja la barra de progreso proporcional al tiempo transcurrido
@@ -927,9 +979,11 @@ func (m AppModel) renderProgressBar() string {
 	m.progressBar.FullColor = string(pink)
 	m.progressBar.EmptyColor = string(selection)
 
-	bar := m.progressBar.ViewAs(percent)
+	progressBar := m.progressBar
+	progressBar.Width = min(progressBar.Width, max(1, m.nowPlayingContentWidth()-18))
+	bar := progressBar.ViewAs(percent)
 	timeInfo := fmt.Sprintf(" %s / %s", formatDuration(m.elapsed), formatDuration(m.totalTime))
-	return lipgloss.NewStyle().MarginLeft(2).Render(bar) + lipgloss.NewStyle().Foreground(cyan).Render(timeInfo)
+	return bar + lipgloss.NewStyle().Foreground(cyan).Render(timeInfo)
 }
 
 // renderMetadataLine genera la fila de información técnica: barra de volumen,
@@ -946,9 +1000,66 @@ func (m AppModel) renderMetadataLine() string {
 	}
 
 	volBar := renderVolumeBar(m.volumeLevel, minVolume, maxVolume, m.Audio.IsMuted())
-	return lipgloss.NewStyle().Foreground(comment).MarginLeft(2).Render(
+	if m.nowPlayingContentWidth() < 45 {
+		modes := fmt.Sprintf("%s %s  |  %s", iconQueue, queueDisplay, m.playlist.repeat.Icon())
+		if m.playlist.shuffle {
+			modes += "  " + iconShuffle
+		}
+		return lipgloss.JoinVertical(
+			lipgloss.Left,
+			lipgloss.NewStyle().Foreground(comment).Render(volBar),
+			lipgloss.NewStyle().Foreground(comment).Render(modes),
+		)
+	}
+	return lipgloss.NewStyle().Foreground(comment).Render(
 		fmt.Sprintf("%s  |  %s %s  |%s| %s ", volBar, iconQueue, queueDisplay, shuffleIcon, m.playlist.repeat.Icon()),
 	)
+}
+
+func (m AppModel) playbackBorderColor() lipgloss.Color {
+	switch m.state {
+	case StatePlaying:
+		return green
+	case StatePaused:
+		return yellow
+	default:
+		return purple
+	}
+}
+
+func (m AppModel) usesWideLayout() bool {
+	return m.width >= 120 && m.showQueue && !m.isPickingFolder && !m.eqActive
+}
+
+func (m AppModel) nowPlayingContentWidth() int {
+	if m.usesWideLayout() {
+		return max(24, (m.width-3)/2-6)
+	}
+	if m.width > 0 {
+		return max(24, min(100, m.width-14))
+	}
+	return 70
+}
+
+func (m AppModel) queueTitleWidth() int {
+	indexWidth := len(fmt.Sprint(max(1, m.playlist.Length())))
+	return max(3, min(45, m.nowPlayingContentWidth()-15-indexWidth))
+}
+
+func (m AppModel) renderQueueCard() string {
+	var content strings.Builder
+	if m.isFiltering {
+		content.WriteString(m.renderFilterBar())
+		content.WriteString("\n")
+		content.WriteString(m.renderSuggestions())
+	}
+	content.WriteString(m.renderPlaylistPanel())
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(purple).
+		Width(m.nowPlayingContentWidth()).
+		Padding(1, 2).
+		Render(content.String())
 }
 
 // renderEQPanel dibuja el panel del ecualizador con una columna por banda,
@@ -995,13 +1106,15 @@ func (m AppModel) renderEQPanel() string {
 // Si el filtro de búsqueda está activo, muestra una ventana centrada en el cursor de búsqueda;
 // en caso contrario, muestra una ventana alrededor del cursor de la lista de reproducción.
 func (m AppModel) renderPlaylistPanel() string {
-	if m.playlist.IsEmpty() {
-		return ""
-	}
-
 	var builder strings.Builder
 	builder.WriteString(lipgloss.NewStyle().Bold(true).Foreground(orange).Render("  " + iconQueue + " Próximamente:"))
 	builder.WriteString("\n")
+	if m.playlist.IsEmpty() {
+		builder.WriteString(lipgloss.NewStyle().Foreground(comment).Render("  Aún no hay pistas en la cola."))
+		return builder.String()
+	}
+
+	titleWidth := m.queueTitleWidth()
 
 	// Vista con filtro de búsqueda activo
 	if m.isFiltering {
@@ -1024,7 +1137,7 @@ func (m AppModel) renderPlaylistPanel() string {
 			if idx == m.filterCursor {
 				cursor = "→  "
 			}
-			builder.WriteString(renderTrackRow(cursor, i, t, i == m.playlist.current, idx == m.filterCursor, 35))
+			builder.WriteString(renderTrackRow(cursor, i, t, i == m.playlist.current, idx == m.filterCursor, titleWidth))
 		}
 
 		if end < len(m.filteredIndices) {
@@ -1048,7 +1161,7 @@ func (m AppModel) renderPlaylistPanel() string {
 		if i == m.cursorIndex {
 			cursor = "→  "
 		}
-		builder.WriteString(renderTrackRow(cursor, i, t, i == m.playlist.current, i == m.cursorIndex, 35))
+		builder.WriteString(renderTrackRow(cursor, i, t, i == m.playlist.current, i == m.cursorIndex, titleWidth))
 	}
 
 	if end < m.playlist.Length() {
@@ -1127,7 +1240,7 @@ func (m AppModel) renderHelpPanel() string {
 
 	var rows []string
 	colsPerRow := 1
-	if m.width > 120 {
+	if m.width > 150 {
 		colsPerRow = 4
 	} else if m.width > 75 {
 		colsPerRow = 2

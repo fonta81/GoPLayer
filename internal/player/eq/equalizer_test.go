@@ -1,4 +1,4 @@
-package player
+package eq
 
 import (
 	"math"
@@ -7,7 +7,6 @@ import (
 	"github.com/faiface/beep"
 )
 
-// staticStreamer genera una señal sinusoidal de prueba.
 type staticStreamer struct {
 	samples [][2]float64
 	pos     int
@@ -25,7 +24,6 @@ func (s *staticStreamer) Stream(samples [][2]float64) (int, bool) {
 
 func (s *staticStreamer) Err() error { return nil }
 
-// sine genera una señal stereo constante de la frecuencia dada.
 func sine(freq, sampleRate float64, n int) [][2]float64 {
 	out := make([][2]float64, n)
 	for i := range out {
@@ -36,10 +34,11 @@ func sine(freq, sampleRate float64, n int) [][2]float64 {
 }
 
 func TestEqualizerBypassAtZeroGain(t *testing.T) {
+	const testSampleRate = beep.SampleRate(44100)
 	sr := 44100.0
 	src := sine(1000, sr, 4096)
 	s := &staticStreamer{samples: src}
-	eq := NewEqualizer(s, beep.SampleRate(sr))
+	eq := NewEqualizer(s, testSampleRate)
 
 	out := make([][2]float64, len(src))
 	n, _ := eq.Stream(out)
@@ -51,17 +50,18 @@ func TestEqualizerBypassAtZeroGain(t *testing.T) {
 }
 
 func TestEqualizerAttenuatesBand(t *testing.T) {
+	const testSampleRate = beep.SampleRate(44100)
 	sr := 44100.0
-	src := sine(60, sr, 8192) // tono en la primera banda (60 Hz)
+	src := sine(60, sr, 8192)
 	s := &staticStreamer{samples: src}
-	eq := NewEqualizer(s, beep.SampleRate(sr))
-	eq.SetGain(0, eqGainMin) // atenuar graves al máximo
+	eq := NewEqualizer(s, testSampleRate)
+	eq.SetGain(0, GainMin)
 
 	out := make([][2]float64, len(src))
 	eq.Stream(out)
 
 	var inAmp, outAmp float64
-	for i := 2048; i < len(src); i++ { // ignorar el transitorio inicial
+	for i := 2048; i < len(src); i++ {
 		inAmp = max(inAmp, math.Abs(src[i][0]))
 		outAmp = max(outAmp, math.Abs(out[i][0]))
 	}
@@ -71,11 +71,12 @@ func TestEqualizerAttenuatesBand(t *testing.T) {
 }
 
 func TestEqualizerDisabledPassthrough(t *testing.T) {
+	const testSampleRate = beep.SampleRate(44100)
 	sr := 44100.0
 	src := sine(60, sr, 2048)
 	s := &staticStreamer{samples: src}
-	eq := NewEqualizer(s, beep.SampleRate(sr))
-	eq.SetGain(0, eqGainMax)
+	eq := NewEqualizer(s, testSampleRate)
+	eq.SetGain(0, GainMax)
 	eq.Enabled = false
 
 	out := make([][2]float64, len(src))
@@ -88,15 +89,15 @@ func TestEqualizerDisabledPassthrough(t *testing.T) {
 }
 
 func TestSetGainClamps(t *testing.T) {
-	eq := NewEqualizer(&staticStreamer{}, standardSampleRate)
+	eq := NewEqualizer(&staticStreamer{}, beep.SampleRate(44100))
 	eq.SetGain(2, 100)
-	if eq.Gains[2] != eqGainMax {
-		t.Fatalf("esperaba clamp a %v, obtuve %v", eqGainMax, eq.Gains[2])
+	if eq.Gains[2] != GainMax {
+		t.Fatalf("esperaba clamp a %v, obtuve %v", GainMax, eq.Gains[2])
 	}
 	eq.SetGain(2, -100)
-	if eq.Gains[2] != eqGainMin {
-		t.Fatalf("esperaba clamp a %v, obtuve %v", eqGainMin, eq.Gains[2])
+	if eq.Gains[2] != GainMin {
+		t.Fatalf("esperaba clamp a %v, obtuve %v", GainMin, eq.Gains[2])
 	}
-	eq.SetGain(-1, 5) // no debe panic
-	eq.SetGain(eqBandCount, 5)
+	eq.SetGain(-1, 5)
+	eq.SetGain(BandCount, 5)
 }

@@ -1,4 +1,4 @@
-package player
+package tui
 
 import (
 	"sort"
@@ -16,7 +16,6 @@ type filterMatch struct {
 	score int
 }
 
-// rebuildFilteredIndices calcula los resultados y sugerencias conservando el ranking actual.
 func (m *AppModel) rebuildFilteredIndices() {
 	trackCount := m.playlist.Length()
 	m.filteredIndices = make([]int, 0, trackCount)
@@ -44,7 +43,6 @@ func (m *AppModel) rebuildFilteredIndices() {
 			matches = append(matches, filterMatch{index: i, score: score})
 			continue
 		}
-
 		if isRuneSubsequence(queryRunes, candidate.normalized) {
 			score := max(1, 30-candidate.runeLength/10)
 			matches = append(matches, filterMatch{index: i, score: score})
@@ -59,31 +57,29 @@ func (m *AppModel) rebuildFilteredIndices() {
 }
 
 func (m *AppModel) ensureSearchCandidates() {
-	if m.searchRevision == m.playlist.revision && len(m.searchCandidates) == m.playlist.Length() {
+	if m.searchRevision == m.playlist.Revision() && len(m.searchCandidates) == m.playlist.Length() {
 		return
 	}
-
 	m.searchCandidates = make([]searchCandidate, 0, m.playlist.Length())
-	for _, track := range m.playlist.tracks {
+	for _, track := range m.playlist.Tracks() {
 		normalized := strings.ToLower(track.DisplayName())
 		m.searchCandidates = append(m.searchCandidates, searchCandidate{
 			normalized: normalized,
 			runeLength: utf8.RuneCountInString(normalized),
 		})
 	}
-	m.searchRevision = m.playlist.revision
+	m.searchRevision = m.playlist.Revision()
 }
 
 func (m *AppModel) copySuggestions() {
 	limit := max(0, min(m.suggestionLimit, len(m.filteredIndices)))
-	m.suggestionIndices = append(m.suggestionIndices, m.filteredIndices[:limit]...)
+	m.suggestionIndices = append(m.suggestionIndices[:0], m.filteredIndices[:limit]...)
 }
 
 func isRuneSubsequence(query []rune, candidate string) bool {
 	if len(query) == 0 {
 		return true
 	}
-
 	queryIndex := 0
 	for _, candidateRune := range candidate {
 		if query[queryIndex] == candidateRune {

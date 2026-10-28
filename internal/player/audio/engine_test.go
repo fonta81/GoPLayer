@@ -1,8 +1,10 @@
-package player
+package audio
 
 import (
 	"sync"
 	"testing"
+
+	"github.com/fonta81/Reproductor-go/internal/player/eq"
 )
 
 func TestAudioEngineStopCancelsPlaybackWait(t *testing.T) {
@@ -43,7 +45,7 @@ func TestAudioEngineIdleStatusSnapshot(t *testing.T) {
 	if engine.HasEQ() || engine.EQEnabled() || engine.IsMuted() {
 		t.Fatal("idle engine should not report enabled audio state")
 	}
-	if got := engine.GetEQBands(); got != ([eqBandCount]float64{}) {
+	if got := engine.GetEQBands(); got != ([eq.BandCount]float64{}) {
 		t.Fatalf("idle EQ bands = %v, want zero values", got)
 	}
 }

@@ -1,4 +1,4 @@
-package player
+package audio
 
 import (
 	"fmt"
@@ -6,9 +6,9 @@ import (
 
 	"github.com/faiface/beep"
 	"github.com/faiface/beep/speaker"
+	"github.com/fonta81/Reproductor-go/internal/player/eq"
 )
 
-// Pause pausa la reproducción actual de forma segura frente al hilo de audio.
 func (ae *AudioEngine) Pause() {
 	speaker.Lock()
 	defer speaker.Unlock()
@@ -17,7 +17,6 @@ func (ae *AudioEngine) Pause() {
 	}
 }
 
-// Resume reanuda la reproducción pausada.
 func (ae *AudioEngine) Resume() {
 	speaker.Lock()
 	defer speaker.Unlock()
@@ -26,7 +25,6 @@ func (ae *AudioEngine) Resume() {
 	}
 }
 
-// SetVolume ajusta la ganancia en decibelios del stream activo.
 func (ae *AudioEngine) SetVolume(level float64) {
 	speaker.Lock()
 	defer speaker.Unlock()
@@ -35,7 +33,6 @@ func (ae *AudioEngine) SetVolume(level float64) {
 	}
 }
 
-// ToggleMute conmuta el silencio sin alterar el nivel configurado.
 func (ae *AudioEngine) ToggleMute() {
 	speaker.Lock()
 	defer speaker.Unlock()
@@ -47,7 +44,6 @@ func (ae *AudioEngine) ToggleMute() {
 	}
 }
 
-// SetEQBand ajusta la ganancia de una banda del ecualizador.
 func (ae *AudioEngine) SetEQBand(band int, gainDB float64) {
 	speaker.Lock()
 	defer speaker.Unlock()
@@ -59,14 +55,12 @@ func (ae *AudioEngine) SetEQBand(band int, gainDB float64) {
 	}
 }
 
-// GetEQBands devuelve una instantánea de las ganancias actuales por banda.
-func (ae *AudioEngine) GetEQBands() [eqBandCount]float64 {
+func (ae *AudioEngine) GetEQBands() [eq.BandCount]float64 {
 	ae.statusMu.RLock()
 	defer ae.statusMu.RUnlock()
 	return ae.eqGains
 }
 
-// ToggleEQ activa o desactiva el ecualizador y devuelve el nuevo estado.
 func (ae *AudioEngine) ToggleEQ() bool {
 	speaker.Lock()
 	defer speaker.Unlock()
@@ -80,28 +74,24 @@ func (ae *AudioEngine) ToggleEQ() bool {
 	return ae.eq.Enabled
 }
 
-// HasEQ indica si hay un ecualizador inicializado.
 func (ae *AudioEngine) HasEQ() bool {
 	ae.statusMu.RLock()
 	defer ae.statusMu.RUnlock()
 	return ae.hasEQ
 }
 
-// EQEnabled indica si el ecualizador está activo.
 func (ae *AudioEngine) EQEnabled() bool {
 	ae.statusMu.RLock()
 	defer ae.statusMu.RUnlock()
 	return ae.eqEnabled
 }
 
-// IsMuted indica si el stream se encuentra silenciado.
 func (ae *AudioEngine) IsMuted() bool {
 	ae.statusMu.RLock()
 	defer ae.statusMu.RUnlock()
 	return ae.muted
 }
 
-// Position devuelve el tiempo transcurrido de reproducción.
 func (ae *AudioEngine) Position() time.Duration {
 	speaker.Lock()
 	defer speaker.Unlock()
@@ -111,7 +101,6 @@ func (ae *AudioEngine) Position() time.Duration {
 	return 0
 }
 
-// Seek desplaza la lectura del stream a la posición indicada.
 func (ae *AudioEngine) Seek(position time.Duration) error {
 	speaker.Lock()
 	defer speaker.Unlock()

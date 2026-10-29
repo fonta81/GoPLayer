@@ -212,7 +212,7 @@ func (r RootModel) View() string {
 	if r.currentScreen == ScreenMenu {
 		return r.menuModel.View()
 	}
-	return r.playerModel.View()
+	return r.playerModel.View() + "\n"
 }
 
 func (r RootModel) Close() {

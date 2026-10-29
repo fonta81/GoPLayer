@@ -71,7 +71,7 @@ func NewAppModel(initialDir string) AppModel {
 		state:           model.StateStopped,
 		progressBar:     bar,
 		volumeLevel:     0,
-		showHelp:        true,
+		showHelp:        false,
 		showQueue:       true,
 		musicDir:        initialDir,
 		filterInput:     ti,

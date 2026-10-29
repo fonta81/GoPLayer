@@ -9,7 +9,7 @@ import (
 
 const (
 	appName         = "GoPlayer"
-	appSubtitle     = "Reproductor de música TUI"
+	appSubtitle     = "Reproductor de música TUI / KeyBinds: h"
 	defaultDir      = "./music"
 	seekSeconds     = 10
 	progressWidth   = 50
